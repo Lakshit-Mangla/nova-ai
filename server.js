@@ -9,7 +9,13 @@ app.use(express.static(path.join(__dirname, "public")));
 const API_KEY = process.env.GEMINI_API_KEY;
 
 // Pehla model busy ho (503/429) toh agla try hoga
-const MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash"];
+const MODELS = [
+  "gemini-3.5-flash-lite",
+  "gemini-3.8-flash",
+  "gemini-2.5-flash-lite",
+  "gemini-2.5-flash",
+];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const SYSTEM_PROMPT = `You are Nova AI, a friendly and helpful AI assistant built by a solo developer learning to code.
 Keep answers clear, warm, and not too long unless the user asks for depth.`;
@@ -34,21 +40,27 @@ app.post("/api/chat", async (req, res) => {
 
   try {
     let response;
-    for (const model of MODELS) {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-      response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": API_KEY,
-        },
-        body: JSON.stringify({
-          contents,
-          systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-        }),
-      });
-      if (response.status !== 503 && response.status !== 429) break;
-      console.error(`${model} busy (${response.status}), trying next model...`);
+    // 2 round: sab models try kar, sab busy ho toh 2 sec ruk ke dobara
+    outer: for (let round = 0; round < 2; round++) {
+      for (const model of MODELS) {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+        response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": API_KEY,
+          },
+          body: JSON.stringify({
+            contents,
+            systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+          }),
+        });
+        if (response.ok) break outer;
+        console.error(`${model} failed (${response.status}), trying next...`);
+        // sirf busy/quota/model-nahi-mila pe aage badh, baaki errors pe ruk ja
+        if (![503, 429, 404].includes(response.status)) break outer;
+      }
+      await sleep(2000);
     }
 
     if (!response.ok) {
