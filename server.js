@@ -1,6 +1,5 @@
-// server.js — simple backend that relays chat messages to the Google Gemini API (free tier)
+// server.js — Nova AI backend (Railway) — relays chat messages to Google Gemini
 const express = require("express");
- require("dotenv").config();
 const path = require("path");
 
 const app = express();
@@ -8,19 +7,19 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
 const API_KEY = process.env.GEMINI_API_KEY;
-const MODEL = "gemini-3-flash-preview"; // current free-tier model
 
-// System prompt — this is where you give your AI its personality/name
+// Pehla model busy ho (503/429) toh agla try hoga
+const MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash"];
+
 const SYSTEM_PROMPT = `You are Nova AI, a friendly and helpful AI assistant built by a solo developer learning to code.
 Keep answers clear, warm, and not too long unless the user asks for depth.`;
 
 app.post("/api/chat", async (req, res) => {
-  const { messages } = req.body; // [{ role: "user"|"assistant", content: "..." }]
+  const { messages } = req.body;
 
   if (!API_KEY) {
     return res.status(500).json({
-      error:
-        "No API key found. Set GEMINI_API_KEY as an environment variable before starting the server.",
+      error: "No API key found. Set GEMINI_API_KEY as an environment variable before starting the server.",
     });
   }
 
@@ -28,29 +27,34 @@ app.post("/api/chat", async (req, res) => {
     return res.status(400).json({ error: "messages array is required" });
   }
 
-  // Gemini uses "user" / "model" roles instead of "user" / "assistant",
-  // and wraps text in a "parts" array.
   const contents = messages.map((m) => ({
     role: m.role === "assistant" ? "model" : "user",
     parts: [{ text: m.content }],
   }));
 
   try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${API_KEY}`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents,
-        systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-      }),
-    });
+    let response;
+    for (const model of MODELS) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+      response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": API_KEY,
+        },
+        body: JSON.stringify({
+          contents,
+          systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+        }),
+      });
+      if (response.status !== 503 && response.status !== 429) break;
+      console.error(`${model} busy (${response.status}), trying next model...`);
+    }
 
     if (!response.ok) {
       const errText = await response.text();
       console.error("Gemini API error:", errText);
-      return res.status(response.status).json({ error: "Upstream API error", detail: errText });
+      return res.status(response.status).json({ error: "AI abhi busy hai, thodi der baad try kar." });
     }
 
     const data = await response.json();
